@@ -19,9 +19,29 @@ def inverse_loss(model, inputs):
     M = Dirac_Matrix(U_tilde, kappa=0.276)
 
     U1 = U1.transpose((0, 2, 3, 1))
-    v = jax.random.normal(
-        key, (128,  *U1.shape), dtype=U1.dtype
-    )
+    v = jax.random.normal(key, (128, *U1.shape), dtype=U1.dtype)
+    v_pred = jax.vmap(HPD_opt, in_axes=(None, 0))(
+        D, v
+    )  # D.apply(D.apply(v), dagger=True)
+    v_pred = jax.vmap(HPD_opt, in_axes=(None, 0))(
+        M, v_pred
+    )  # M.apply(M.apply(v_pred), dagger=True)
+    loss = jnp.linalg.norm((v_pred - v).reshape(*v.shape[:2], -1), axis=-1)
+    # loss = jnp.mean((v_pred - v)**2)
+    return jnp.mean(loss)
+
+
+def inverse_loss_U_paths(model, inputs):
+    U_paths = inputs[0]
+    U1 = U_paths[:, :2, ...]
+    key = inputs[-1]
+    U_tilde = jax.vmap(model)(U_paths).squeeze()
+    U_tilde = U_tilde.reshape(U1.shape[0], 2, 8, 8)
+    D = Dirac_Matrix(U1, kappa=0.276)
+    M = Dirac_Matrix(U_tilde, kappa=0.276)
+
+    U1 = U1.transpose((0, 2, 3, 1))
+    v = jax.random.normal(key, (128, *U1.shape), dtype=U1.dtype)
     v_pred = jax.vmap(HPD_opt, in_axes=(None, 0))(
         D, v
     )  # D.apply(D.apply(v), dagger=True)

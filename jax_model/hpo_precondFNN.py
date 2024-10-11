@@ -56,7 +56,6 @@ def train(
         model = eqx.nn.inference_mode(model)
         return loss_fn(model, inputs)
 
-
     train_losses = []
     val_losses = []
     scale = []

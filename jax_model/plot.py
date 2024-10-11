@@ -105,12 +105,12 @@ def read_log(file_path):
         for line in f:
             train_match = re.findall(train_pattern, line)
             val_match = re.findall(val_pattern, line)
-            scale_match = re.findall(scale_pattern, line)
+            # scale_match = re.findall(scale_pattern, line)
             if len(train_match) == 0 or len(val_match) == 0:
                 continue
             train_loss.append(float(train_match[0]))
             val_loss.append(float(val_match[0]))
-            scale.append(float(scale_match[0]))
+            # scale.append(float(scale_match[0]))
 
     return train_loss, val_loss, scale
 
@@ -165,7 +165,8 @@ def plot_sorted_scatter(point_lists, labels):
         ax.scatter(np.arange(len(points)), points[base_order], label=labels[i])
     ax.set_xlabel("Index")
     ax.set_ylabel("Condition number")
-    ax.set_ylim(0, np.max(q90))
+    # ax.set_ylim(0, np.max(q90))
+    ax.set_yscale("log")
     ax.legend()
     return fig, ax
 

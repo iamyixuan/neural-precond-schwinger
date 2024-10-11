@@ -3,18 +3,22 @@ Modified from
 https://github.com/Ceyron/machine-learning-and-simulation/blob/main/english/neural_operators/simple_FNO_in_JAX.ipynb
 """
 
+from typing import Callable, List
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from typing import Callable, List
 
 
-class SpectralConv1d(eqx.Module):
-    real_weights: jax.Array
-    imag_weights: jax.Array
+class SpectralConv2d(eqx.Module):
+    real_weights1: jax.Array
+    imag_weights1: jax.Array
+    real_weights2: jax.Array
+    imag_weights2: jax.Array
     in_channels: int
     out_channels: int
-    modes: int
+    modes1: int
+    modes2: int
 
     def __init__(
         self,
@@ -26,59 +30,85 @@ class SpectralConv1d(eqx.Module):
     ):
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.modes = modes
+        self.modes1 = modes
+        self.modes2 = modes
 
         scale = 1.0 / (in_channels * out_channels)
 
-        real_key, imag_key = jax.random.split(key)
-        self.real_weights = jax.random.uniform(
-            real_key,
-            (in_channels, out_channels, modes),
+        real_key1, imag_key1, real_key2, imag_key2 = jax.random.split(key, 4)
+        self.real_weights1 = jax.random.uniform(
+            real_key1,
+            (in_channels, out_channels, modes, modes),
             minval=-scale,
             maxval=+scale,
         )
-        self.imag_weights = jax.random.uniform(
-            imag_key,
-            (in_channels, out_channels, modes),
+        self.imag_weights1 = jax.random.uniform(
+            imag_key1,
+            (in_channels, out_channels, modes, modes),
+            minval=-scale,
+            maxval=+scale,
+        )
+        self.real_weights2 = jax.random.uniform(
+            real_key2,
+            (in_channels, out_channels, modes, modes),
+            minval=-scale,
+            maxval=+scale,
+        )
+        self.imag_weights2 = jax.random.uniform(
+            imag_key2,
+            (in_channels, out_channels, modes, modes),
             minval=-scale,
             maxval=+scale,
         )
 
-    def complex_mult1d(
+    def complex_mult2d(
         self,
         x_hat,
         w,
     ):
-        return jnp.einsum("iM,ioM->oM", x_hat, w)
+        return jnp.einsum("ixy,ioxy->oxy", x_hat, w)
 
     def __call__(
         self,
         x,
     ):
-        channels, spatial_points = x.shape
+        channels, X, T = x.shape
 
-        # shape of x_hat is (in_channels, spatial_points//2+1)
-        x_hat = jnp.fft.rfft(x)
-        # shape of x_hat_under_modes is (in_channels, self.modes)
-        x_hat_under_modes = x_hat[:, : self.modes]
-        weights = self.real_weights + 1j * self.imag_weights
-        # shape of out_hat_under_modes is (out_channels, self.modes)
-        out_hat_under_modes = self.complex_mult1d(x_hat_under_modes, weights)
+        x_hat = jnp.fft.fft2(
+            x
+        )  # since the input is complex, we use fft instead of rfft
 
-        # shape of out_hat is (out_channels, spatial_points//2+1)
-        out_hat = jnp.zeros(
-            (self.out_channels, x_hat.shape[-1]), dtype=x_hat.dtype
+        x_hat_under_modes1 = x_hat[:, : self.modes1, : self.modes2]
+        x_hat_under_modes2 = x_hat[:, -self.modes1 :, -self.modes2 :]
+        weights1 = self.real_weights1 + 1j * self.imag_weights1
+        weights2 = self.real_weights2 + 1j * self.imag_weights2
+
+        out_hat_under_modes1 = self.complex_mult2d(
+            x_hat_under_modes1, weights1
         )
-        out_hat = out_hat.at[:, : self.modes].set(out_hat_under_modes)
+        out_hat_under_modes2 = self.complex_mult2d(
+            x_hat_under_modes2, weights2
+        )
 
-        out = jnp.fft.irfft(out_hat, n=spatial_points)
+        out_hat = jnp.zeros(
+            (self.out_channels, x_hat.shape[-2], x_hat.shape[-1]),
+            dtype=x_hat.dtype,
+        )
+        out_hat = out_hat.at[:, : self.modes1, : self.modes2].set(
+            out_hat_under_modes1
+        )
+        out_hat = out_hat.at[:, -self.modes1 :, -self.modes2 :].set(
+            out_hat_under_modes2
+        )
+
+        out = jnp.fft.ifft2(out_hat)
 
         return out
 
 
-class FNOBlock1d(eqx.Module):
-    spectral_conv: SpectralConv1d
-    bypass_conv: eqx.nn.Conv1d
+class FNOBlock2d(eqx.Module):
+    spectral_conv: SpectralConv2d
+    bypass_conv: eqx.nn.Conv2d
     activation: Callable
 
     def __init__(
@@ -91,16 +121,16 @@ class FNOBlock1d(eqx.Module):
         key,
     ):
         spectral_conv_key, bypass_conv_key = jax.random.split(key)
-        self.spectral_conv = SpectralConv1d(
+        self.spectral_conv = SpectralConv2d(
             in_channels,
             out_channels,
             modes,
             key=spectral_conv_key,
         )
-        self.bypass_conv = eqx.nn.Conv1d(
+        self.bypass_conv = eqx.nn.Conv2d(
             in_channels,
             out_channels,
-            1,  # Kernel size is one
+            1,  # Kernel size is one, same as element-wise linear transformation
             key=bypass_conv_key,
         )
         self.activation = activation
@@ -109,29 +139,31 @@ class FNOBlock1d(eqx.Module):
         self,
         x,
     ):
-        return self.activation(self.spectral_conv(x) + self.bypass_conv(x))
+        spectral_out = self.spectral_conv(x)
+        bypass_out = self.bypass_conv(x.real) + 1j * self.bypass_conv(x.imag)
+        return self.activation(spectral_out + bypass_out)
 
 
-class FNO1d(eqx.Module):
-    lifting: eqx.nn.Conv1d
-    fno_blocks: List[FNOBlock1d]
-    projection: eqx.nn.Conv1d
+class FNO2d(eqx.Module):
+    lifting: eqx.nn.Conv2d
+    fno_blocks: List[FNOBlock2d]
+    projection: eqx.nn.Conv2d
 
     def __init__(
         self,
         in_channels,
         out_channels,
         modes,
-        width,
+        h_channels,
         activation,
         n_blocks=4,
         *,
         key,
     ):
         key, lifting_key = jax.random.split(key)
-        self.lifting = eqx.nn.Conv1d(
+        self.lifting = eqx.nn.Conv2d(
             in_channels,
-            width,
+            h_channels,
             1,
             key=lifting_key,
         )
@@ -140,9 +172,9 @@ class FNO1d(eqx.Module):
         for i in range(n_blocks):
             key, subkey = jax.random.split(key)
             self.fno_blocks.append(
-                FNOBlock1d(
-                    width,
-                    width,
+                FNOBlock2d(
+                    h_channels,
+                    h_channels,
                     modes,
                     activation,
                     key=subkey,
@@ -150,8 +182,8 @@ class FNO1d(eqx.Module):
             )
 
         key, projection_key = jax.random.split(key)
-        self.projection = eqx.nn.Conv1d(
-            width,
+        self.projection = eqx.nn.Conv2d(
+            h_channels,
             out_channels,
             1,
             key=projection_key,
@@ -161,11 +193,25 @@ class FNO1d(eqx.Module):
         self,
         x,
     ):
-        x = self.lifting(x)
+        x = self.lifting(x.real) + 1j * self.lifting(x.imag)
 
         for fno_block in self.fno_blocks:
             x = fno_block(x)
 
-        x = self.projection(x)
+        x = self.projection(x.real) + 1j * self.projection(x.imag)
 
         return x
+
+
+if __name__ == "__main__":
+    import jax.numpy as jnp
+
+    key = jax.random.PRNGKey(0)
+    x = jax.random.uniform(key, (2, 8, 8))
+    x = jnp.asarray(x, jnp.complex64)
+
+    FNO = FNO2d(2, 2, 8, 8, jnp.tanh, n_blocks=4, key=key)
+    y = FNO(x)
+
+    print(y.shape)
+    print(y)

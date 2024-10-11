@@ -4,28 +4,43 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from precondFNN_U_tilde import PrecondFNN, U1DDDataset
+from src.model.FNO2d import FNO2d
 from src.utils.metrics import (compute_condition_number,
                                construct_Dirac_Matrix, get_batch_matrix,
                                load_model)
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader 
+from src.utils.data import U1pathsDataset
 
 
-def main(args, configs):
-    model = load_model(configs, PrecondFNN, args.checkpoint)
-    valset = U1DDDataset(args.data_path, mode="val")
-    valloader = DataLoader(valset, batch_size=valset.__len__())
-    for data in valloader:
-        U1, DD, mask = data
-        U1 = jnp.asarray(U1)
-        DD = jnp.asarray(DD)
-        mask = jnp.nonzero(jnp.array(mask))
-        U_tilde = jax.vmap(model)(U1).squeeze()
+def main(args, configs, network="FNO", if_u_paths=False):
+    if network == "FNO":
+        model = load_model(configs, FNO2d, args.checkpoint)
+    else:
+        model = load_model(configs, PrecondFNN, args.checkpoint)
 
+    if if_u_paths:
+        valset = U1pathsDataset(args.data_path, mode="val")
+        valloader = DataLoader(valset, batch_size=valset.__len__())
+        for data in valloader:
+            U_paths = jnp.asarray(data)
+            U1 = U_paths[:, :2, ...]
+            U_tilde = jax.vmap(model)(U_paths).squeeze()
+    else:
+        valset = U1DDDataset(args.data_path, mode="val")
+        valloader = DataLoader(valset, batch_size=valset.__len__())
+        for data in valloader:
+            U1, DD, mask = data
+            U1 = jnp.asarray(U1)
+            DD = jnp.asarray(DD)
+            mask = jnp.nonzero(jnp.array(mask))
+            U_tilde = jax.vmap(model)(U1).squeeze()
+
+    if network != "FNO":
+        U_tilde = U_tilde.reshape(U1.shape[0], 2, 8, 8)
     print(U1.shape, U_tilde.shape)
-    U_tilde = U_tilde.reshape(U1.shape[0], U_tilde.shape[-1] // 128, 2, 8, 8)
-    M1 = construct_Dirac_Matrix(U_tilde[:, 0, ...])
-    M2 = construct_Dirac_Matrix(U_tilde[:, 1, ...])
-    M3 = construct_Dirac_Matrix(U_tilde[:, 2, ...])
+    assert len(U_tilde.shape) == 4
+
+    M = construct_Dirac_Matrix(U_tilde)
     D = construct_Dirac_Matrix(U1)
 
     def f_org(x):
@@ -38,9 +53,7 @@ def main(args, configs):
         if x.shape[-3:] != (8, 8, 2):
             x = x.reshape(x.shape[0], 8, 8, 2)
         Dx = D.apply(D.apply(x), dagger=True)
-        MDx = M1.apply(M1.apply(Dx), dagger=True)
-        MDx = M2.apply(M2.apply(MDx), dagger=True)
-        MDx = M3.apply(M3.apply(MDx), dagger=True)
+        MDx = M.apply(M.apply(Dx), dagger=True)
         return MDx
 
     org_mat = get_batch_matrix(f_org, b_size=U1.shape[0])
@@ -69,6 +82,8 @@ if __name__ == "__main__":
         help="Data path",
     )
     args = parser.parse_args()
+    model_name = args.checkpoint.split("/")[-2]
+    print(f"Model name: {model_name}")
     configs = {
         "key": jax.random.PRNGKey(0),
         "in_dim": 128,
@@ -76,21 +91,28 @@ if __name__ == "__main__":
         "activation": eqx.nn.PReLU(),
         "layer_sizes": [1024] * 3,
     }
-    org, pred = main(args, configs)
+    configs_fno = {
+        "in_channels": 18,
+        "out_channels": 2,
+        "modes": 8,
+        "h_channels": 16,
+        "activation": eqx.nn.PReLU(),
+        "n_blocks": 4,
+        "key": jax.random.PRNGKey(0),
+    }
+
+    org, pred = main(args, configs_fno, network="FNO", if_u_paths=True)
     fig, ax = plot_hist([org, pred], ["Original", "Preconditioned"])
-    fig.savefig(
-        "../figures/u_tilde_inverse_loss_hist_multiRV.pdf", bbox_inches="tight"
-    )
+    fig.savefig(f"../figures/{model_name}_condNum_hist.pdf", bbox_inches="tight")
     fig, ax = plot_sorted_scatter([org, pred], ["Original", "Preconditioned"])
     fig.savefig(
-        "../figures/u_tilde_inverse_loss_sorted_scatter_multiRV.pdf",
+        f"../figures/{model_name}_sorted_scatter.pdf",
         bbox_inches="tight",
     )
 
-    train_loss, val_loss, scale = read_log(
-        args.checkpoint + "/log.txt"
-    )
+    train_loss, val_loss, scale = read_log(args.checkpoint + "/log.txt")
     fig, ax = plot_train(train_loss, val_loss)
     fig.savefig(
-        "../figures/u_tilde_inverse_loss_train_multiRV.pdf", bbox_inches="tight"
+        f"../figures/{model_name}_loss_curves.pdf",
+        bbox_inches="tight",
     )
