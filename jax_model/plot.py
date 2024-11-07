@@ -167,6 +167,7 @@ def plot_sorted_scatter(point_lists, labels):
     ax.set_ylabel("Condition number")
     # ax.set_ylim(0, np.max(q90))
     ax.set_yscale("log")
+    ax.grid(linestyle="dotted")
     ax.legend()
     return fig, ax
 

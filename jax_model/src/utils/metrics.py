@@ -45,9 +45,9 @@ def construct_matrix(opt, B, n=128):
     return M
 
 
-def construct_Dirac_Matrix(U1, kappa=0.276):
-    if U1.shape[-3:] != (2, 8, 8):
-        U1 = U1.reshape(U1.shape[0], 2, 8, 8)
+def construct_Dirac_Matrix(U1, v, kappa=0.276):
+    if U1.shape[-3:] != (v, v, 2):
+        U1 = U1.reshape(U1.shape[0], 2, v, v)
     return Dirac_Matrix(U1, kappa=kappa)
 
 

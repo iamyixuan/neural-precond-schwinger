@@ -49,18 +49,6 @@ class U1DDDataset(Dataset):
         return self.U1[idx], self.DD[idx], self.mask
 
 
-class ComplexLinear(eqx.Module):
-    fc_layer: eqx.nn.Linear
-
-    def __init__(self, *args, **kwargs):
-        self.fc_layer = eqx.nn.Linear(*args, **kwargs)
-
-    def __call__(self, x):
-        x_real = x.real
-        x_imag = x.imag
-        return self.fc_layer(x_real) + 1j * self.fc_layer(x_imag)
-
-
 def condition_number_loss_tilde(model, inputs):
     U1, DD, mask, _ = inputs
     U_tilde = jax.vmap(model)(U1).squeeze()

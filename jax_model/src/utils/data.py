@@ -94,6 +94,33 @@ class U1DDataset(Dataset):
         return U1, self.DD_mat[idx]
 
 
+class RawU1Dataset(Dataset):
+    def __init__(self, datapath, mode):
+        U1 = np.load(datapath)
+        assert U1.shape[1] == 2
+        U1 = np.exp(1j * U1)
+
+        train_idx, val_idx = self.split_idx(U1.shape[0], 0.8)
+
+        if mode == "train":
+            self.U1 = U1[train_idx]
+        elif mode == "val":
+            self.U1 = U1[val_idx]
+
+        print(f"Initializing {mode} dataset - U1 {self.U1.shape}")
+
+    def split_idx(self, n, split):
+        idx = jax.random.permutation(jax.random.PRNGKey(0), n)
+        return idx[: int(n * split)], idx[int(n * split) :]
+
+    def __len__(self):
+        return self.U1.shape[0]
+
+    def __getitem__(self, idx):
+        U1 = self.U1[idx]
+        return U1
+
+
 class U1DDatasetCOO(Dataset):
     def __init__(self, datapath, mode):
 
