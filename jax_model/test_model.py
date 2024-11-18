@@ -36,7 +36,7 @@ def main(args, configs, network="FNO"):
     elif args.data_L == 32:
         data_name = "config.l32-N200-b2.0-k0.276-unquenched-test.x.npy"
     elif args.data_L == 64:
-        data_name = "config.l64-N200-b2.0-k0.276-unquenched-test.x.npy"
+        data_name = "config.l64-N32-b2.0-k0.276-unquenched-test.x.npy"
 
     data_dir = "../data/U1Configs/"
     data_path = os.path.join(data_dir, data_name)
@@ -45,8 +45,13 @@ def main(args, configs, network="FNO"):
     U1 = jnp.exp(1j * U1)
 
     no_pc_hist, pc_hist = cg_solve(model, U1)
-    jnp.save(f"./plot_data/{network}_no_pc_hist.npy", no_pc_hist)
-    jnp.save(f"./plot_data/{network}_pc_hist.npy", pc_hist)
+    jnp.save(
+        f"./plot_data/M{args.model_L}_D{args.data_L}_no_pc_hist.npy",
+        no_pc_hist,
+    )
+    jnp.save(
+        f"./plot_data/M{args.model_L}_D{args.data_L}_pc_hist.npy", pc_hist
+    )
 
     assert False
 

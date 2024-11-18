@@ -26,8 +26,9 @@ def cg_solve(model, U1):
     b = b_real + 1j * b_imag
 
     # time the two methods
+    num_iter = 2000
     start = time.time()
-    pcg_state1, hist1 = solve(lambda x: HPD_opt(D, x), b, 500, 1e-8, 0.0)
+    pcg_state1, hist1 = solve(lambda x: HPD_opt(D, x), b, num_iter, 1e-8, 0.0)
     end = time.time()
 
     print(f"Time taken for cg: {end - start}")
@@ -37,7 +38,7 @@ def cg_solve(model, U1):
     # start = time.time()
     #
     pcg_state2, hist2 = solve(
-        lambda x: HPD_opt(D, x), b, 500, 1e-8, 0.0, lambda x: HPD_opt(M, x)
+        lambda x: HPD_opt(D, x), b, num_iter, 1e-8, 0.0, lambda x: HPD_opt(M, x)
     )
     end = time.time()
     print(f"Time taken for pcg: {end - start}")
