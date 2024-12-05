@@ -31,13 +31,14 @@ def load_model(configs, model, checkpoint):
     return model
 
 
-def construct_matrix(opt, B, n=128):
+def construct_matrix(opt, B, L=8):
+    n = L * L * 2
     identity = jnp.identity(n)
     B_identity = jnp.repeat(identity[None, ...], B, axis=0)
     columns = []
     for i in range(B_identity.shape[1]):
         e_i = B_identity[:, :, i]
-        e_i = e_i.reshape(B, 8, 8, 2)
+        e_i = e_i.reshape(B, L, L, 2)
         columns.append(
             opt(e_i)
         )  

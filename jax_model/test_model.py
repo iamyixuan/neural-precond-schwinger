@@ -44,13 +44,24 @@ def main(args, configs, network="FNO"):
     U1 = jnp.load(data_path)
     U1 = jnp.exp(1j * U1)
 
-    no_pc_hist, pc_hist = cg_solve(model, U1)
-    jnp.save(
-        f"./plot_data/M{args.model_L}_D{args.data_L}_no_pc_hist.npy",
-        no_pc_hist,
+    hist, time = cg_solve(model, U1)
+    no_pc_hist, nn_pc_hist, IC_pc_hist = hist
+    no_pc_time, nn_pc_time, IC_pc_time = time
+    jnp.savez(
+        f"./plot_data/M{args.model_L}_D{args.data_L}_no_pc_hist.npz",
+        hist=no_pc_hist,
+        time=no_pc_time,
     )
-    jnp.save(
-        f"./plot_data/M{args.model_L}_D{args.data_L}_pc_hist.npy", pc_hist
+    jnp.savez(
+        f"./plot_data/M{args.model_L}_D{args.data_L}_nn_pc_hist.npz", 
+        hist=nn_pc_hist,
+        time=nn_pc_time,
+
+    )
+    jnp.savez(
+        f"./plot_data/M{args.model_L}_D{args.data_L}_ic_pc_hist.npy",
+        hist=IC_pc_hist,
+        time=IC_pc_time,
     )
 
     assert False
