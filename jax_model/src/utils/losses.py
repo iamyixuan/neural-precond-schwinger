@@ -18,8 +18,8 @@ def inverse_loss(model, inputs, num_v=128):
     D = Dirac_Matrix(U1, kappa=0.276)
     M = Dirac_Matrix(U_tilde, kappa=0.276)
 
-    U1 = U1.transpose((0, 2, 3, 1)) # align with the vector shape
-    
+    U1 = U1.transpose((0, 2, 3, 1))  # align with the vector shape
+
     v = jax.random.normal(key, (num_v, *U1.shape), dtype=U1.dtype)
     v_pred = jax.vmap(HPD_opt, in_axes=(None, 0))(
         D, v
@@ -28,6 +28,27 @@ def inverse_loss(model, inputs, num_v=128):
         M, v_pred
     )  # M.apply(M.apply(v_pred), dagger=True)
     loss = jnp.linalg.norm((v_pred - v).reshape(*v.shape[:2], -1), axis=-1)
+    return jnp.mean(loss)
+
+
+def inverse_loss_double(model, inputs, num_v=128):
+    U1 = inputs[0]
+    key = inputs[-1]
+    U_tilde = jax.vmap(model)(U1).squeeze()
+    # U_tilde = U_tilde.reshape(U1.shape[0], 2, 8, 8)
+    D = Dirac_Matrix(U1, kappa=0.276)
+    M = Dirac_Matrix(U_tilde, kappa=0.276)
+
+    U1 = U1.transpose((0, 2, 3, 1))  # align with the vector shape
+
+    v = jax.random.normal(key, (num_v, *U1.shape), dtype=U1.dtype)
+    # Mv
+    Mv = jax.vmap(HPD_opt, in_axes=(None, 0))(M, v)  # AMv
+    AMv = jax.vmap(HPD_opt, in_axes=(None, 0))(D, Mv)
+    # MAMv
+    MAMv = jax.vmap(HPD_opt, in_axes=(None, 0))(D, AMv)
+
+    loss = jnp.linalg.norm((MAMv - Mv).reshape(*v.shape[:2], -1), axis=-1)
     return jnp.mean(loss)
 
 
@@ -94,9 +115,7 @@ def condition_number_loss(model, U1, DD_mat):
 def condition_number_loss_coo(model, U1, edges, DD_mat, adj_mat):
     _, M = jax.vmap(model, in_axes=(0, 0, None))(U1, edges, adj_mat)
     M = M.squeeze()
-    batch_idx = jnp.broadcast_to(
-        adj_mat.indices, (M.shape[0],) + adj_mat.indices.shape
-    )
+    batch_idx = jnp.broadcast_to(adj_mat.indices, (M.shape[0],) + adj_mat.indices.shape)
     M = sparse.BCOO((M, batch_idx), shape=(M.shape[0],) + adj_mat.shape)
     M = M.todense()
 

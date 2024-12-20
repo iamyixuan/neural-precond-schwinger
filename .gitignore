@@ -5,6 +5,7 @@ checkpoints/
 wandb/
 *.pyc
 *.npy
+*.npz
 *.pkl
 *.png
 experiments/

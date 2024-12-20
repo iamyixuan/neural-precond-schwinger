@@ -157,7 +157,7 @@ def plot_hist(hist_list, label_list):
     return fig, ax
 
 def plot_sorted_scatter(point_lists, labels):
-    fig, ax = plt.subplots(figsize=set_size("thesis"))
+    fig, ax = plt.subplots(figsize=set_size(390))
     base_order = np.argsort(point_lists[0])
     q90 = []
     for i, points in enumerate(point_lists):
@@ -171,6 +171,25 @@ def plot_sorted_scatter(point_lists, labels):
     ax.legend()
     return fig, ax
 
+def plot_cg_hist(hist_list, label_list):
+    fig, ax = plt.subplots(figsize=set_size(390))
+    ax.set_box_aspect(1 / 1.62)
+
+    for i in range(len(hist_list)):
+        ax.plot(np.mean(hist_list[i], axis=1), label=label_list[i])
+        # plot 1.96 * std
+        ax.fill_between(
+            np.arange(hist_list[i].shape[0]),
+            np.mean(hist_list[i], axis=1) - 1.96 * np.std(hist_list[i], axis=1),
+            np.mean(hist_list[i], axis=1) + 1.96 * np.std(hist_list[i], axis=1),
+            alpha=0.15,
+        )
+    ax.set_yscale("log")
+    ax.grid(which="both", color="gray", linestyle="dotted", alpha=0.5)
+    ax.set_xlabel("Number of iterations")
+    ax.set_ylabel("Average residual norm")
+    ax.legend()
+    return fig
 
 if __name__ == "__main__":
     import argparse

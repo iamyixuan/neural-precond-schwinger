@@ -77,31 +77,36 @@ def cg_solve(model, U1):
     print(len(hist_nn_pc))
 
     # apply IC preconditioner
-    """
-    To apply ichol PC we need to 
-        1. compute the matrices 
-        2. perfrom ichol decomposition
-        3. construct a solve as M_inv * x 
-        4. pass this solve operator as the preconditioner to the CG solver
-    """
-    DD_mats = construct_matrix(
-        lambda x: HPD_opt(D, x),
-        U1.shape[0],
-        L=U1.shape[2],
-    )
+    if U1.shape[-1] == 8:
+        """
+        To apply ichol PC we need to 
+            1. compute the matrices 
+            2. perfrom ichol decomposition
+            3. construct a solve as M_inv * x 
+            4. pass this solve operator as the preconditioner to the CG solver
+        """
+        DD_mats = construct_matrix(
+            lambda x: HPD_opt(D, x),
+            U1.shape[0],
+            L=U1.shape[2],
+        )
 
-    L0 = ichol0(DD_mats) 
-    U0 = L0.conj().transpose((0, 2, 1))
-    ichol_M = lambda x: preconditioner(L0, U0, x)
-    
-    print(DD_mats.shape, L0.shape, U0.shape)
-    pcg_state3, hist_IC_pc, IC_pc_time = solve(
-        lambda x: HPD_opt(D, x), b, num_iter, 1e-8, 0.0, ichol_M
-    )
+        L0 = jax.vmap(ichol0)(DD_mats) 
+        U0 = L0.conj().transpose((0, 2, 1))
+        ichol_M = lambda x: preconditioner(L0, U0, x)
+        
+        print(DD_mats.shape, L0.shape, U0.shape)
+        pcg_state3, hist_IC_pc, IC_pc_time = solve(
+            lambda x: HPD_opt(D, x), b, num_iter, 1e-8, 0.0, ichol_M
+        )
 
 
-    print(hist_IC_pc[-1].mean())
-    print(len(hist_IC_pc))
+        print(hist_IC_pc[-1].mean())
+        print(len(hist_IC_pc))
+
+    else:
+        hist_IC_pc = 0
+        IC_pc_time = 0
     return (hist_no_pc, hist_nn_pc, hist_IC_pc), (no_pc_time, nn_pc_time, IC_pc_time)
     
 

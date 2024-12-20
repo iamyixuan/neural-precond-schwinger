@@ -16,7 +16,6 @@ def quick_ichol0(A):
     return L0
 
 
-@jax.vmap
 def ichol0(A):
     """
     Compute a ichol0 of a dense SPD matrix A.
