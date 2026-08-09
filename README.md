@@ -1,7 +1,82 @@
-# Progress Summary
-We aim to construct and train an implicit neural network-based preconditioner to accelerate solving the large linear systems associated with the Dirac equation in lattice gauge theory. Solving the linear systems determined by the complex gauge fields often requires effective preconditioners to apply the iterative solver efficiently. However, the choice and acquirement of the preconditioner could also bring excessive computational overhead. To address this issue, we aim to leverage the expressiveness of deep neural networks to construct linear operators from the complex gauge field so that they can be used as preconditioners without the explicit construction of matrices, reducing the memory demand for storing large matrices for both linear systems and preconditioners. The current challenges include effective representation learning of the linear system resulting from the complex gauge fields and efficient estimation of the condition number of the preconditioned system.
+# neural-precond-schwinger — Neural Preconditioners for the Lattice Schwinger Model
 
-To achieve matrix-free learning and preconditioner creation, the current work focuses on two parts: extracting sufficient information from the original linear operator $D^{\dagger}D$, determined by the gauge fields, and producing a linear map (preconditioner) by minimizing a loss that corresponds to a faster convergence of the conjugate gradient solver or a lower condition number of the preconditioned linear system. For the first part, we applied the linear operator to $m$ (near) orthogonal vectors, $m\leq n$, $n$ being the dimension of the vectors, to project to different directions to retain the information. The orthogonality of the vectors is imposed during training by an additional loss term. For the second part, we have designed loss functions based on the residual norm of a conjugate gradient solver after a fixed number of iterations, the matrix-free estimation of condition numbers, and the calculation of $K$-condition numbers. The current results suggest that when $m$ is close to $n$, the orthogonal vectors sufficiently describe the linear operator, and neural network-produced preconditioners facilitated convergence on the training examples but were not helpful in the validation data (overfitting). 
+Learned preconditioners for the Wilson–Dirac normal operator $D^\dagger D$ of the
+two-flavor Schwinger model (2D U(1) lattice gauge theory), implemented in JAX.
 
+Two network families map a gauge configuration $U$ to an auxiliary field
+$\tilde U$ that defines the preconditioner
+$M^{-1} = (\tilde D^\dagger \tilde D)^p$ built from the same Wilson stencil:
 
-The next steps include investigating the minimal effective $m$ for the orthogonal trainable vectors, repeating numerical experiments with more data, implementing and evaluating more reliable and efficient matrix-free methods to estimate the condition number, and exploring different types of neural network architectures and building blocks that are independent of the problem volume. Also, we plan to examine randomized frameworks, e.g., blendenpik, to establish a baseline and search for possible improvement using machine learning under the same framework.
+- **FNO** — a 2D Fourier neural operator (`src/model/FNO2d.py`)
+- **FCN** — a fully convolutional network (`src/model/complexCNN.py`)
+
+Both are trained unsupervised with the inverse-approximation loss
+$\| M^{-1} A v - v \|$ over Gaussian probe vectors (`src/utils/losses.py`),
+and evaluated by preconditioned CG on held-out configurations.
+
+## Install
+
+Requires Python ≥ 3.10 and [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv sync            # CPU / Apple Silicon
+uv sync --extra cuda   # NVIDIA CUDA 12 hosts
+```
+
+## Data
+
+Training expects U(1) gauge configurations as a NumPy array of link phases
+$\theta$ with shape `(N, 2, L, L)`, stored at
+`data/U1Configs/config.l{L}-N1600-b2.0-k{kappa}-unquenched.npy`
+(links are recovered as $U = e^{i\theta}$).
+
+Configurations can be generated with
+[JulianSchwingerModel](https://github.com/ylin910095/JulianSchwingerModel)
+(HMC for the two-flavor Schwinger model, Julia).
+
+## Train
+
+From the `jax_model/` directory:
+
+```bash
+# FNO, e.g. L=16, kappa=0.276, preconditioner power p=1
+python -m scripts.precondFNO_L --L 16 --kappa 0.276 --power 1
+
+# FCN (hydra-configured; see configs/config.yaml)
+python -m scripts.precondCNN_L data.L=16 data.kappa=0.276
+```
+
+Logs and checkpoints (`best_model.eqx`, `last_model.eqx`) are written under
+`./logs/<run_name>/`. The FCN script also logs to Weights & Biases
+(project set in `configs/config.yaml`).
+
+## Test
+
+```bash
+# materialize D^dag D matrices for held-out configs
+python -m scripts.make_testing_matrices --DL 16 --kappa 0.276
+
+# preconditioned CG comparison (NN vs even-odd)
+python -m scripts.evenOdd_cg --ML 16 --DL 16 --kappa 0.276
+
+# CG with scipy (unpreconditioned / NN / incomplete Cholesky)
+python -m scripts.scipy_cg --precond nn_pc
+```
+
+Plotting helpers live in `scripts/plot.py` / `scripts/make_plot.py`.
+
+## Layout
+
+```
+jax_model/
+  configs/       hydra config for FCN training
+  scripts/       training, testing, and plotting entry points
+  src/model/     FNO2d, complex CNN
+  src/utils/     Wilson-Dirac operator, losses, CG solvers, iChol, metrics
+  tests/         model/regression tests (pytest)
+```
+
+## Citation
+
+If you use this code, please cite the accompanying paper on neural
+preconditioners for lattice Dirac systems.

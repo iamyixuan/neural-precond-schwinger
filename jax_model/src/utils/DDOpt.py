@@ -1,84 +1,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-
-def gamma_factory(n_dim, incl_g5=False):
-    """A function to generate the 4x4 Wick-rotated gamma matrices.
-    Arguments:
-        n_dim: number of dimensions. Currently only 2 and
-            4 are implemented.
-        incl_g5: returns g5 as the final matrix.
-    Returns:
-        gammas: list of gamma matrices. In the 4D case,
-            returns in the format [γ_x, γ_y, γ_z, γ_t]
-                i.e. [γ_1, γ_2, γ_3, γ_0], contrary to convention.
-            In the 2D case, returns the two 2D gamma matrices:
-                [γ_1, γ_0]
-                where γ_0 = i σ_x  // γ_0 = -i σ_y
-
-    """
-    # generate the sigma matrices (building blocks of gamma matrices).
-    # sigma_mu = (I, sigma_x, sigma_y, sigma_z)
-    paulis = [
-        np.array([[1, 0], [0, 1]], dtype=np.cdouble),
-        np.array([[0, 1], [1, 0]], dtype=np.cdouble),
-        np.array([[0, -1j], [1j, 0]], dtype=np.cdouble),
-        np.array([[1, 0], [0, -1]], dtype=np.cdouble),
-    ]
-
-    if n_dim == 4:
-        # Weyl/chiral basis 0,1,2,3
-        zeros_2x2 = np.zeros((2, 2), dtype=np.cdouble)
-        gammas = np.array(
-            [
-                np.vstack(
-                    (
-                        np.hstack((zeros_2x2, sigma)),
-                        np.hstack(((1 if mu == 0 else -1) * sigma, zeros_2x2)),
-                    )
-                )
-                for mu, sigma in enumerate(paulis)
-            ]
-        )  # ^mu ^alpha _beta
-        sigma = np.array(
-            [
-                [
-                    0.5j
-                    * (
-                        np.dot(gammas[mu], gammas[nu])
-                        - np.dot(gammas[nu], gammas[mu])
-                    )
-                    for nu in range(4)
-                ]
-                for mu in range(4)
-            ]
-        )
-
-        # TO EUCLIDEAN: txyz -> xyztau
-        # match conventions from https://en.wikipedia.org/wiki/Gamma_matrices#Chiral_representation
-        gammas = [1j * g for g in gammas[1:]] + [gammas[0]]
-        gammas[1] *= -1  # match conventions from QDP manual
-
-        if incl_g5:
-            gamma5 = gammas[0] @ gammas[1] @ gammas[2] @ gammas[3]
-            return gammas + [gamma5]
-        else:
-            return gammas
-
-        return gammas
-    elif n_dim == 2:
-        gammas = [paulis[1], paulis[2]]
-        if incl_g5:
-            gamma5 = 1j * (gammas[1] @ gammas[0])
-            return gammas + [gamma5]
-        else:
-            return gammas
-
-    else:
-        raise NotImplementedError(
-            "Only 2D and 4D gamma matrices are currently implemented"
-        )
+from .gamma import gamma_factory
 
 
 class Dirac_Matrix:
@@ -191,6 +114,54 @@ class Dirac_Matrix:
         return (padded_x, tuple(slice_idx))
 
 
+class EvenOddPreconditionedOperator:
+    def __init__(self, dirac_operator):
+        self.D = dirac_operator
+        self.shape = dirac_operator.lattice_shape
+        X, T = self.shape
+        xx, tt = jnp.meshgrid(jnp.arange(X), jnp.arange(T), indexing="ij")
+        parity = (xx + tt) % 2
+        self.even_mask = (parity == 0).flatten()
+        self.odd_mask = ~self.even_mask
+
+    def _mask(self, x, mask):
+        return x.reshape(x.shape[0], -1, x.shape[-1])[:, mask]
+
+    def _unmask(self, x_sub, mask):
+        return x_sub
+
+    def __call__(self, x_e):
+        # Embed x_e to full lattice
+        x_full = self._unmask(x_e, self.even_mask)
+
+        # Step 1: D_oe x_e
+        Doex = self.D.apply(x_full)
+        Doex = self._mask(Doex, self.odd_mask)
+
+        # Step 2: Solve D_oo z = Doex
+        def solve_odd(rhs_odd):
+            rhs_full = self._unmask(rhs_odd[None], self.odd_mask)
+            z_full = self.D.apply(rhs_full, dagger=False)
+            return self._mask(z_full, self.odd_mask)
+
+        z = jax.vmap(solve_odd)(Doex)
+
+        # Step 3: D_eo z
+        z_full = self._unmask(z, self.odd_mask)
+        Dcorr = self.D.apply(z_full, dagger=False)
+        Dcorr = self._mask(Dcorr, self.even_mask)
+
+        # Step 4: M_eo x_e = D_ee x_e - D_eo D_oo^{-1} D_oe x_e
+        Dfull = self.D.apply(x_full, dagger=False)
+        Dfull_even = self._mask(Dfull, self.even_mask)
+        Meo_x = Dfull_even - Dcorr
+
+        # Step 5: Apply adjoint: M_eo^† (M_eo x_e)
+        Meo_full = self._unmask(Meo_x, self.even_mask)
+        result = self.D.apply(Meo_full, dagger=True)
+        return self._mask(result, self.even_mask)
+
+
 class DiracGamma:
     def __init__(self, U, gammas, kappa=0.276):
         """
@@ -294,26 +265,3 @@ class DiracGamma:
         # assert jnp.allclose(padded_x[tuple(slice_idx)], x), 'invalid padding'  # Convert list to tuple here
         return (padded_x, tuple(slice_idx))
 
-
-if __name__ == "__main__":
-    key = jax.random.PRNGKey(0)
-    B = 10
-    U = jax.random.normal(key, (B, 2, 8, 8), dtype=jnp.complex64)
-    # gammas = jax.random.normal(key, (B, 3, 2, 2), dtype=jnp.complex64)
-    gammas = jnp.stack(
-        gamma_factory(n_dim=2, incl_g5=False), axis=0, dtype=jnp.complex64
-    )
-    gammas = jnp.repeat(gammas[None, ...], B, axis=0)
-    x = jax.random.normal(key, (B, 8, 8, 2), dtype=jnp.complex64)
-    opt = DiracGamma(U, gammas)
-
-    out = opt.apply(x, dagger=True)
-
-    opt_true = Dirac_Matrix(U, 0.276)
-    out_true = opt_true.apply(x, dagger=True)
-
-    print(jnp.allclose(out, out_true))
-
-    # the shape looks good, now we need a sanity check
-    # to know if it really works with the real U1 field
-    # and the gammas

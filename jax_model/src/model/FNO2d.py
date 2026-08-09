@@ -202,16 +202,3 @@ class FNO2d(eqx.Module):
 
         return x
 
-
-if __name__ == "__main__":
-    import jax.numpy as jnp
-
-    key = jax.random.PRNGKey(0)
-    x = jax.random.uniform(key, (2, 8, 8))
-    x = jnp.asarray(x, jnp.complex64)
-
-    FNO = FNO2d(2, 2, 8, 8, jnp.tanh, n_blocks=4, key=key)
-    y = FNO(x)
-
-    print(y.shape)
-    print(y)

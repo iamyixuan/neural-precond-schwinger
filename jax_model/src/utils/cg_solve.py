@@ -1,25 +1,33 @@
 import time
+from functools import partial
 from typing import NamedTuple
+from pathlib import Path
+from tqdm import tqdm
 
 import jax
+from jax import config
+config.update("jax_enable_x64", True)
 import jax.numpy as jnp
+from jax import lax
 import numpy as np
-
+from jax.scipy.linalg import solve_triangular
+from jax import config
 from .DDOpt import Dirac_Matrix
 from .losses import HPD_opt
-from .ichols import ichol0
+from .ichols import ichol0, jit_ichol0
 from .metrics import construct_matrix
+from .jax_solver import solve
 
-# from jax import config
-# config.update("jax_enable_x64", True)
+
 def forward_substitution(L, b):
     """Solve L * y = b using forward substitution."""
     y = []
     b = b.ravel()
     for i in range(len(b)):
-        y_i = (b[i] - jnp.vdot(L[i, :i], jnp.array(y))) / L[i, i]
+        y_i = (b[i] - jnp.dot(L[i, :i], jnp.array(y))) / L[i, i]
         y.append(y_i)
     return jnp.array(y)
+
 
 def back_substitution(U, y):
     """Solve U * x = y using back substitution."""
@@ -27,31 +35,64 @@ def back_substitution(U, y):
     y = y.ravel()
     n = len(y)
     for i in range(n - 1, -1, -1):
-        x_i = (y[i] - jnp.vdot(U[i, i + 1:], jnp.array(x[::-1]))) / U[i, i]
+        x_i = (y[i] - jnp.vdot(U[i, i + 1 :], jnp.array(x[::-1]))) / U[i, i]
         x.append(x_i)
     return jnp.array(x[::-1])
+
+
+# def preconditioner(L, U, v):
+#     v_flat = v.reshape(v.shape[0], -1)  # (B, n)
+#     y = solve_triangular(L, v_flat.T, lower=True)
+#     z = solve_triangular(U, y, lower=False)
+#     return z.reshape(v.shape)
+
+
+# @jax.jit
+# def batched_ichol_solve(L, U, v):
+#     v_flat = v.reshape(v.shape[0], -1)  # (B, n)
+#     y = solve_triangular(L, v_flat, lower=True)  # Solve L * y = v
+#     z = solve_triangular(U, y, lower=False)
+#     z = z.reshape(v.shape)
+#     return z
+
+
+@jax.jit
+def batched_ichol_solve(L, v):
+    B = v.shape[0]
+    n = v.reshape(B, -1).shape[-1]
+    v_flat = v.reshape(B, n)
+
+    # 1) solve     L y = v
+    y = solve_triangular(L, v_flat, lower=True)
+    # 2) solve U z = y
+    z = solve_triangular(L, y, lower=True, trans="C")
+
+    return z.reshape(v.shape)
+
 
 @jax.vmap
 def preconditioner(L, U, v):
     """Apply ILU preconditioner M^{-1} to vector v."""
     y = forward_substitution(L, v)  # Solve L * y = v
-    z = back_substitution(U, y)    # Solve U * z = y
-    
-    X = int(jnp.sqrt(L.shape[0] / 2))
-    return z.reshape(X, X, 2)
+    z = back_substitution(U, y)  # Solve U * z = y
+    return z.reshape(v.shape)
 
 
-def cg_solve(model, U1):
+def cg_solve(model, U1, kappa, p=1, use_ichol=False, **kwargs):
     """
     CG solve with different preconditioners
     Args:
         model: trained model
         U1: batched gauge config
     """
-    U_tilde = jax.vmap(model)(U1).squeeze()
+    if kwargs.get("U_tilde") is not None:
+        print("Using provided U_tilde...")
+        U_tilde = kwargs["U_tilde"]
+    else:
+        U_tilde = jax.vmap(model)(U1).squeeze()
 
-    D = Dirac_Matrix(U1, kappa=0.276)
-    M = Dirac_Matrix(U_tilde, kappa=0.276)
+    D = Dirac_Matrix(U1, kappa=kappa)
+    M = Dirac_Matrix(U_tilde, kappa=kappa)
 
     key = jax.random.PRNGKey(0)
     b_real = jax.random.normal(key, (U1.shape[0], U1.shape[2], U1.shape[3], 2))
@@ -60,145 +101,152 @@ def cg_solve(model, U1):
 
     # time the two methods
     num_iter = 2000
-    start = time.time()
-    pcg_state1, hist_no_pc, no_pc_time = solve(lambda x: HPD_opt(D, x), b, num_iter, 1e-8, 0.0)
-    end = time.time()
+    #
+    DD_opt = jax.jit(lambda x: HPD_opt(D, x, 1))
+    NN_M_opt = jax.jit(lambda x: HPD_opt(M, x, p))
 
-    print(f"Time taken for cg: {end - start}")
-    print(hist_no_pc[-1].mean())
+    BATCH_SIZE = 1
 
-    # apply neural PC
-    pcg_state2, hist_nn_pc, nn_pc_time = solve(
-        lambda x: HPD_opt(D, x), b, num_iter, 1e-8, 0.0, lambda x: HPD_opt(M, x)
-    )
-    end = time.time()
-    print(f"Time taken for pcg: {end - start}")
-    print(hist_nn_pc[-1].mean())
-    print(len(hist_nn_pc))
+    unpred_hist_list = []
+    nnpred_hist_list = []
+
+    for i in tqdm(range(U1.shape[0] // BATCH_SIZE)):
+        U1_batch = U1[i * BATCH_SIZE : (i + 1) * BATCH_SIZE]
+        Utilde_batch = U_tilde[i * BATCH_SIZE : (i + 1) * BATCH_SIZE]
+
+        D_batch = Dirac_Matrix(U1_batch, kappa=kappa)
+        M_batch = Dirac_Matrix(Utilde_batch, kappa=kappa)
+
+        b_batch = b[i * BATCH_SIZE : (i + 1) * BATCH_SIZE]
+
+        DD_opt = jax.jit(lambda x: HPD_opt(D_batch, x, 1))
+        NN_M_opt = jax.jit(lambda x: HPD_opt(M_batch, x, p))
+
+
+        pcg_state1, hist_no_pc, no_pc_time = solve(
+            DD_opt, b_batch, max_iters=num_iter, tol=1e-8
+        )
+        # apply neural
+        pcg_state2, hist_nn_pc, nn_pc_time = solve(
+            DD_opt, b_batch, max_iters=num_iter, tol=1e-8, M=NN_M_opt
+        )
+
+        unpred_hist_list.append(hist_no_pc)
+        nnpred_hist_list.append(hist_nn_pc)
+
+
+
 
     # apply IC preconditioner
-    if U1.shape[-1] == 8:
-        """
-        To apply ichol PC we need to 
-            1. compute the matrices 
-            2. perfrom ichol decomposition
-            3. construct a solve as M_inv * x 
-            4. pass this solve operator as the preconditioner to the CG solver
-        """
-        DD_mats = construct_matrix(
-            lambda x: HPD_opt(D, x),
-            U1.shape[0],
-            L=U1.shape[2],
-        )
-
-        L0 = jax.vmap(ichol0)(DD_mats) 
-        U0 = L0.conj().transpose((0, 2, 1))
-        ichol_M = lambda x: preconditioner(L0, U0, x)
-        
-        print(DD_mats.shape, L0.shape, U0.shape)
-        pcg_state3, hist_IC_pc, IC_pc_time = solve(
-            lambda x: HPD_opt(D, x), b, num_iter, 1e-8, 0.0, ichol_M
+    if use_ichol:
+        print("Loading precomputed ICHOL matrices...")
+        Ichol_path = Path(
+            "./data/U1Configs/matrices/"
         )
 
 
-        print(hist_IC_pc[-1].mean())
-        print(len(hist_IC_pc))
+        L0_name = kwargs["data_name"].replace("config", "L0-matrices")
+        L0 = np.load(Ichol_path / L0_name)
+
+        # process batches of 2 matrices
+        max_iter = 0
+        batch_size = 1
+        num_batches = L0.shape[0] // batch_size
+        hist_list_IC = []
+        for i in tqdm(range(num_batches), desc="IC preconditioner solve"):
+            L0_batch = jnp.array(L0[i * batch_size : (i + 1) * batch_size])
+
+            D_batch = Dirac_Matrix(
+                U1[i * batch_size : (i + 1) * batch_size], kappa=kappa
+            )
+            DD_opt_batch = jax.jit(lambda x: HPD_opt(D_batch, x, 1))
+            b_batch = b[i * batch_size : (i + 1) * batch_size]
+
+            ichol_M_batch = partial(batched_ichol_solve, L0_batch)
+
+            _, hist_IC_pc_batch, IC_pc_time_batch = solve(
+                DD_opt_batch,
+                b_batch,
+                num_iter,
+                1e-8,
+                0.0,
+                ichol_M_batch,
+            )
+            if len(hist_IC_pc_batch) > max_iter:
+                max_iter = len(hist_IC_pc_batch)
+            hist_list_IC.append(hist_IC_pc_batch.tolist())
 
     else:
-        hist_IC_pc = 0
+
+        hist_list_IC = [[0]]
         IC_pc_time = 0
-    return (hist_no_pc, hist_nn_pc, hist_IC_pc), (no_pc_time, nn_pc_time, IC_pc_time)
-    
+    return (unpred_hist_list, nnpred_hist_list, hist_list_IC)
 
 
-"""
-    Preconditioned Congugate Gradient solver
-    Adopted and modified from
-    https://towardsdatascience.com/implementing-linear-operators-in-python-with-google-jax-c56be3a966c2
-"""
+class EvenOddPreconditioner:
+    def __init__(self, D_op, inner_max_iters=10, inner_tol=1e-4):
+        self.D_op = D_op
+        self.kappa = D_op.kappa
+        self.inner_max_iters = inner_max_iters
+        self.inner_tol = inner_tol
 
+        # even-site mask, shape (1, X, T, 1) for broadcasting
+        x_idx, y_idx = jnp.meshgrid(
+            jnp.arange(D_op.lattice_shape[0]),
+            jnp.arange(D_op.lattice_shape[1]),
+            indexing="ij",
+        )
+        even_mask = ((x_idx + y_idx) % 2 == 0)[..., None]
+        self.even_mask = even_mask[None, ...]
 
-def _identity(x):
-    return x
+    def inner_solve(self, r_even):
+        B = r_even.shape[0]
+        x = jnp.zeros_like(r_even)
+        r = r_even
 
+        def A(x_):
+            tmp = self.D_op.apply(x_, dagger=True)
+            tmp = self.D_op.apply(tmp, dagger=False)
+            return x_ - self.kappa**2 * tmp
 
-class PCGState(NamedTuple):
-    x: jnp.ndarray
-    r: jnp.ndarray
-    p: jnp.ndarray
-    gamma: jnp.ndarray
-    iterations: int
-
-
-def solve_from(A, b, x0, max_iters=20, tol=1e-4, atol=0.0, M=_identity):
-    """
-    Modified version should directly work with batched systems,
-    the stopping criterion is based on the worst case scenario
-
-    Args:
-        A: Linear operator that acts on vectors of shape (B, X, T, 2)
-        b: RHS of the linear system of shape (B, X, T, 2)
-        x0: Initial guess of the solution of shape (B, X, T, 2)
-        max_iters: Maximum number of iterations
-        tol: Relative tolerance, if all residuals satisfies in the batch
-        atol: Absolute tolerance, if all residuals satisfies in the batch
-
-    """
-    # Boyd Conjugate Gradients slide 22
-    b_norm_sqr = jnp.vdot(b, b)
-    max_gamma = jnp.maximum(jnp.square(tol) * b_norm_sqr, jnp.square(atol))
-    B = b.shape[0]
-
-    def init():
-        r0 = b - A(x0)
-        p0 = z0 = M(r0)
-        gamma = jax.vmap(jnp.vdot)(r0.reshape(B, -1), z0.reshape(B, -1))
-        return PCGState(x=x0, r=r0, p=p0, gamma=gamma, iterations=1)
-
-    def body(state):
-        p = state.p
-        Ap = A(p)
-        alpha = (state.gamma / jax.vmap(jnp.vdot)(p.reshape(B, -1), Ap.reshape(B, -1)))[
-            :, None, None, None
-        ]
-
-        x = state.x + alpha * p
-        r = state.r - alpha * Ap
-        z = M(r)
-        gamma = jax.vmap(jnp.vdot)(r.reshape(B, -1), z.reshape(B, -1))
-        beta = (gamma / state.gamma)[..., None, None, None]
-        p = z + beta * p
-        return PCGState(x=x, r=r, p=p, gamma=gamma, iterations=state.iterations + 1), (
-            x,
-            r,
-            p,
-            gamma,
-            state.iterations + 1,
+        p = z = r
+        gamma = jax.vmap(lambda a, b: jnp.vdot(a, b))(
+            r.reshape(B, -1), z.reshape(B, -1)
         )
 
-    state = init()
-    gamma = state.gamma
-    rnorm_hist = []
-    start_time = time.time()
-    while (gamma > max_gamma).any() & (state.iterations < max_iters):
-        state, (x, r, p, gamma, iterations) = body(state)
-        gamma = (
-            state.gamma
-            if M is _identity
-            else jax.vmap(jnp.vdot)(r.reshape(B, -1), r.reshape(B, -1))
-        )
-        rnorm = jnp.linalg.norm(r.reshape(B, -1), axis=-1)
-        rnorm_hist.append(rnorm)
-    end_time = time.time()
-    time_taken = end_time - start_time
-    return state, rnorm_hist, time_taken
+        eps = 1e-10
 
+        def cond(state):
+            x, r, p, gamma, i = state
+            rnorm = jnp.linalg.norm(r.reshape(B, -1), axis=-1)
+            return (i < self.inner_max_iters) & (rnorm > self.inner_tol).any()
 
-# solve_from_jit = jit(
-#     solve_from, static_argnames=("A", "max_iters", "tol", "atol", "M")
-# )
+        def body(state):
+            x, r, p, gamma, i = state
+            Ap = A(p)
+            Ap_dot_p = jax.vmap(lambda a, b: jnp.vdot(a, b))(
+                p.reshape(B, -1), Ap.reshape(B, -1)
+            )
+            Ap_dot_p = jnp.where(jnp.abs(Ap_dot_p) < eps, eps, Ap_dot_p)
+            alpha = (gamma / Ap_dot_p)[:, None, None, None]
 
+            x_new = x + alpha * p
+            r_new = r - alpha * Ap
+            z_new = r_new
+            gamma_new = jax.vmap(lambda a, b: jnp.vdot(a, b))(
+                r_new.reshape(B, -1), z_new.reshape(B, -1)
+            )
 
-def solve(A, b, max_iters=20, tol=1e-4, atol=0.0, M=_identity):
-    x0 = jnp.zeros_like(b)
-    return solve_from(A, b, x0, max_iters, tol, atol, M)
+            gamma_safe = jnp.where(jnp.abs(gamma) < eps, eps, gamma)
+            beta = (gamma_new / gamma_safe)[:, None, None, None]
+            p_new = z_new + beta * p
+            return (x_new, r_new, p_new, gamma_new, i + 1)
+
+        state = (x, r, p, gamma, 0)
+        x_final, *_ = jax.lax.while_loop(cond, body, state)
+        return x_final
+
+    def __call__(self, r):
+        r_even = r * self.even_mask
+        x_even = self.inner_solve(r_even)
+        return x_even * self.even_mask

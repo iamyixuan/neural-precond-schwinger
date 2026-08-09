@@ -65,7 +65,6 @@ def split_data(data_idx, train_ratio=0.8, random=True, key=None):
 
 class U1DDataset(Dataset):
     def __init__(self, datapath, mode):
-
         data = torch.load(datapath)
         DD_mat = np.array(data["DD_mat"])
         U1 = np.array(data["U1"])
@@ -123,7 +122,6 @@ class RawU1Dataset(Dataset):
 
 class U1DDatasetCOO(Dataset):
     def __init__(self, datapath, mode):
-
         data = torch.load(datapath)
         DD_mat = np.array(data["DD_mat"])[:200]
         adj_matrix = np.where(DD_mat[0] != 0.0, 1.0, 0.0)
@@ -165,11 +163,3 @@ class U1DDMaskDataset(U1DDataset):
         U1, DD_mat = super().__getitem__(idx)
         return U1, DD_mat, self.mask
 
-
-if __name__ == "__main__":
-    from torch.utils.data import DataLoader
-
-    dataset = U1pathsDataset(
-        "/Users/yixuan.sun/Documents/Projects/Preconditioners/MatrixPreNet/data/U1_paths.pt",
-        "train",
-    )

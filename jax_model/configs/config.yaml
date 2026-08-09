@@ -1,0 +1,33 @@
+model:
+  inch: 2
+  outch: 2
+  activation: 
+    _target_: equinox.nn.PReLU
+  kernel_size: 3
+  n_layers: 4
+  hidden_dim: 16
+
+data:
+  dir: ./data/U1Configs/
+  L: 64
+  kappa: 0.276
+  beta: 2.0
+
+train:
+  seed: 0
+  num_epochs: 10000
+  batch_size: 128
+  lr: 1e-4
+  loss: single 
+  power: 1
+  num_vec: 128
+  patience: 50
+
+wandb:
+  project: neural_precond
+  name: precondCNN_L${data.L}_kappa${data.kappa}_beta${data.beta}_seed${train.seed}_num_v${train.num_vec}
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

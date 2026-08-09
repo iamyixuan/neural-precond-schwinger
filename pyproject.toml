@@ -1,0 +1,34 @@
+[project]
+name = "neural-precond-schwinger"
+version = "0.1.0"
+description = "JAX implementation of MatrixPreNet — neural preconditioners for the 2D lattice Schwinger model (U(1))"
+authors = [{name = "Yixuan Sun"}]
+requires-python = ">=3.10"
+dependencies = [
+    "jax",
+    "equinox",
+    "optax",
+    "jaxtyping",
+    "hilbertcurve",
+    "hydra-core",
+    "omegaconf",
+    "wandb",
+    "numpy",
+    "scipy",
+    "torch",
+    "tqdm",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+# Install on NVIDIA/CUDA 12 hosts (e.g. a GPU cluster): `uv sync --extra cuda`.
+# Omit on CPU / Apple Silicon, where the base `jax` wheel is used.
+cuda = ["jax[cuda12]"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.uv]
+# Scripts are run as `python -m scripts.X` from the jax_model directory, so the
+# project itself does not need to be built/installed — only its dependencies.
+package = false
