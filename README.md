@@ -1,4 +1,4 @@
-# neural-precond-schwinger — Neural Preconditioners for the Lattice Schwinger Model
+# Neural Preconditioners for the Lattice Schwinger Model
 
 Learned preconditioners for the Wilson–Dirac normal operator $D^\dagger D$ of the
 two-flavor Schwinger model (2D U(1) lattice gauge theory), implemented in JAX.
@@ -78,5 +78,15 @@ jax_model/
 
 ## Citation
 
-If you use this code, please cite the accompanying paper on neural
-preconditioners for lattice Dirac systems.
+If you use this code, please cite:
+
+> Sun, Yixuan, Srinivas Eswar, Yin Lin, William Detmold, Phiala Shanahan, Yang Liu, Xiaoye Li, and Prasanna Balaprakash. "Matrix-free Neural Preconditioner for the Dirac Operator in Lattice Gauge Theory." ACM Transactions on AI for Science (2026).
+
+```bibtex
+@article{sun2025matrix,
+  title={Matrix-free Neural Preconditioner for the Dirac Operator in Lattice Gauge Theory},
+  author={Sun, Yixuan and Eswar, Srinivas and Lin, Yin and Detmold, William and Shanahan, Phiala and Liu, Yang and Li, Xiaoye and Balaprakash, Prasanna},
+  journal={ACM Transactions on AI for Science},
+  year={2026},
+  publisher={ACM New York, NY}
+}
